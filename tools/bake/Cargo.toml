@@ -1,0 +1,11 @@
+[package]
+name = "bake"
+version = "0.1.0"
+edition = "2024"
+description = "Bake the 3D Rust logo into per-frame normal codes for the Game Boy"
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+debug = false

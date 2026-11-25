@@ -1,0 +1,18 @@
+[package]
+name = "rust-logo-3d"
+version = "0.1.0"
+edition = "2024"
+autobins = false
+
+[lib]
+name = "rust_logo_3d"
+path = "src/main.rs"
+crate-type = ["staticlib"]
+
+[dependencies]
+rust-gb = { path = "../rust-gb/crates/gb", features = ["cgb-double-speed", "bank"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1

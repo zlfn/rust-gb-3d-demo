@@ -1,0 +1,3 @@
+# core's `fmt::rt::Argument` is `repr(align(2))`
+[target.sm83-nintendo-none-elf]
+rustflags = ["-Cllvm-args=-z80-warn-stack-align-padding=2"]
