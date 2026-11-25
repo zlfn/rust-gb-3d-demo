@@ -31,14 +31,19 @@ use tables::Light;
 
 /// Shaded tiles waiting for VBlank, at most. A power of two.
 const RING: usize = 32;
+/// Sixteen-byte blocks one VBlank has time to copy.
+const ROOM: u8 = RING as u8;
+const MAP_BLOCKS: u8 = (SIDE * 32 / 16) as u8;
 
 static mut OUT: hdma::Source<[u8; RING * 16]> = hdma::Source([0; RING * 16]);
 static mut MAP_IMAGE: hdma::Source<[u8; SIDE * 32]> = hdma::Source([0; SIDE * 32]);
 
-/// The main loop shades tiles into `OUT` and counts them in `SHADED`; the VBlank
-/// handler copies them to the hidden map's bank and counts them in `SENT`. Once
-/// `SWAP` is set and all `TOTAL` tiles are across, the handler shows the hidden
-/// map and clears `SWAP`.
+/// The main loop fills `MAP_IMAGE` and sets `MAP_DUE`, then shades tiles into
+/// `OUT` and counts them in `SHADED`. The VBlank handler copies the map image to
+/// the hidden map, then the tiles to its bank, counting them in `SENT`, at most
+/// `ROOM` blocks a VBlank. Once `SWAP` is set and all `TOTAL` tiles are across,
+/// the handler shows the hidden map and clears `SWAP`.
+static MAP_DUE: AtomicBool = AtomicBool::new(false);
 static SHADED: AtomicU8 = AtomicU8::new(0);
 static SENT: AtomicU8 = AtomicU8::new(0);
 static TOTAL: AtomicU8 = AtomicU8::new(0);
@@ -78,12 +83,22 @@ fn hidden() -> (Map, VramBank, u16) {
 #[gb::rt::interrupt(VBlank)]
 fn on_vblank() {
     ppu::frame_tick();
-    // SAFETY: this runs at the start of VBlank, and copies well under its length.
+    // SAFETY: this runs at the start of VBlank and copies at most `ROOM` blocks,
+    // which fit in it.
     let d = unsafe { Access::assume() };
     let (map, bank, base) = hidden();
+    let mut room = ROOM;
+
+    if MAP_DUE.load(Acquire) {
+        let image = unsafe { &(*(&raw const MAP_IMAGE)).0 };
+        ppu::with_vram_bank(VramBank::Zero, || hdma::copy(d, base, image));
+        MAP_DUE.store(false, Release);
+        room -= MAP_BLOCKS;
+    }
 
     // Tile `i` of a frame goes to slot `i + 1`; slot 0 is blank.
-    let (mut i, shaded) = (SENT.load(Relaxed), SHADED.load(Acquire));
+    let mut i = SENT.load(Relaxed);
+    let shaded = SHADED.load(Acquire).min(i + room);
     let out = unsafe { &(*(&raw const OUT)).0 };
     while i < shaded {
         let at = i as usize % RING;
@@ -95,8 +110,6 @@ fn on_vblank() {
     SENT.store(i, Release);
 
     if SWAP.load(Acquire) && i == TOTAL.load(Relaxed) {
-        let image = unsafe { &(*(&raw const MAP_IMAGE)).0 };
-        ppu::with_vram_bank(VramBank::Zero, || hdma::copy(d, base, image));
         bg::set_map(map);
         SWAP.store(false, Release);
     }
@@ -125,6 +138,7 @@ fn draw(data: &[u8], vblank: &Vblank) {
     for y in 0..SIDE {
         image[y * 32..][..SIDE].copy_from_slice(&map[y * SIDE..][..SIDE]);
     }
+    MAP_DUE.store(true, Release);
     let out = unsafe { (*(&raw mut OUT)).0.as_mut_ptr() };
     for i in 0..count {
         while i - SENT.load(Acquire) == RING as u8 {
